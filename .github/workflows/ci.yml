@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DATABASE_URL: postgresql://wagering:wagering@localhost:5432/wagering
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      SQS_ENDPOINT: http://localhost:4566
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+
+      - run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Unit tests
+        run: bun run test:unit
+
+      - name: Start Postgres and LocalStack
+        run: docker compose up -d --wait postgres localstack
+
+      - name: Migrations up, down, up
+        run: bun run migrate && bun run migrate:down && bun run migrate
+
+      - name: Integration tests
+        run: bun run test:integration
+
+      - name: Build app image
+        run: docker compose --profile app build app
+
+      - name: Service logs on failure
+        if: failure()
+        run: docker compose logs --no-color
