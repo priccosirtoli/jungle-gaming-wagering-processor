@@ -1,5 +1,6 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { LockMode, UniqueConstraintViolationException } from '@mikro-orm/core';
+import { LockMode, LockWaitTimeoutException, UniqueConstraintViolationException } from '@mikro-orm/core';
+import { Metrics } from '../infrastructure/observability/metrics.js';
 import { MikroORM, type EntityManager } from '@mikro-orm/postgresql';
 import type { Money } from '../domain/money/money.js';
 import { applyWagerTransaction } from '../domain/wager/apply-wager-transaction.js';
@@ -61,9 +62,29 @@ const LOCK_TIMEOUT = '5s';
 export class ProcessWagerService {
   private readonly logger = new Logger(ProcessWagerService.name);
 
-  constructor(@Inject(MikroORM) private readonly orm: MikroORM) {}
+  constructor(
+    @Inject(MikroORM) private readonly orm: MikroORM,
+    @Inject(Metrics) private readonly metrics: Metrics,
+  ) {}
 
   async execute(cmd: SubmitWagerCommand, meta: ProcessMeta): Promise<WagerResult> {
+    const started = performance.now();
+    const source = meta.inbox ? 'sqs' : 'http';
+    const result = await this.executeOnce(cmd, meta).catch((error: unknown) => {
+      if (error instanceof LockWaitTimeoutException) {
+        this.metrics.increment('wallet_lock_timeouts_total');
+      }
+      throw error;
+    });
+    this.metrics.increment('wager_transactions_total', 1, { status: result.transaction.status, source });
+    if (result.idempotentReplay) {
+      this.metrics.increment('duplicates_detected_total', 1, { source });
+    }
+    this.metrics.observeMs('wager_processing_ms', performance.now() - started, { source });
+    return result;
+  }
+
+  private async executeOnce(cmd: SubmitWagerCommand, meta: ProcessMeta): Promise<WagerResult> {
     const hash = hashWagerCommand(cmd);
     try {
       return await this.orm.em.fork().transactional((em) => this.process(em, cmd, hash, meta));
@@ -83,7 +104,10 @@ export class ProcessWagerService {
   private async process(em: EntityManager, cmd: SubmitWagerCommand, hash: string, meta: ProcessMeta): Promise<WagerResult> {
     await em.execute(`set local lock_timeout = '${LOCK_TIMEOUT}'`);
 
+    const lockStarted = performance.now();
     const walletRecord = await em.findOne(WalletRecord, { id: cmd.walletId }, { lockMode: LockMode.PESSIMISTIC_WRITE });
+    // Time spent waiting for other operations on the same wallet (lock contention).
+    this.metrics.observeMs('wallet_lock_wait_ms', performance.now() - lockStarted);
     if (!walletRecord) {
       throw new NotFoundError('WALLET_NOT_FOUND', `Wallet ${cmd.walletId} not found`);
     }
@@ -91,6 +115,7 @@ export class ProcessWagerService {
     if (meta.inbox) {
       const fresh = await this.recordInbox(em, meta.inbox);
       if (!fresh) {
+        this.metrics.increment('inbox_duplicates_total');
         this.logger.log({ message: 'Duplicate message detected by inbox', messageId: meta.inbox.messageId });
       }
     }

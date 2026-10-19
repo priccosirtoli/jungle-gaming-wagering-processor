@@ -14,3 +14,7 @@ DLQ_ARN=$(awslocal sqs get-queue-attributes \
 awslocal sqs create-queue \
   --queue-name wager-transactions.fifo \
   --attributes "{\"FifoQueue\":\"true\",\"ContentBasedDeduplication\":\"false\",\"VisibilityTimeout\":\"30\",\"RedrivePolicy\":\"{\\\"deadLetterTargetArn\\\":\\\"${DLQ_ARN}\\\",\\\"maxReceiveCount\\\":\\\"5\\\"}\"}"
+
+# Integration events published by the outbox. Standard queue: consumers
+# deduplicate by eventId, so ordering/dedup from FIFO is not relied upon.
+awslocal sqs create-queue --queue-name wagering-events

@@ -10,7 +10,13 @@ describe('health', () => {
   let baseUrl: string;
 
   beforeAll(async () => {
-    app = await createApp({ ...loadConfig(), port: 0 });
+    const config = loadConfig();
+    app = await createApp({
+      ...config,
+      port: 0,
+      consumer: { ...config.consumer, enabled: false },
+      outbox: { ...config.outbox, enabled: false },
+    });
     await app.listen(0);
     baseUrl = await app.getUrl();
   });

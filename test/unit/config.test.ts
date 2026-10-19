@@ -11,9 +11,11 @@ describe('loadConfig', () => {
   test('uses the FIFO queue names from the challenge by default', () => {
     delete process.env.SQS_QUEUE_NAME;
     delete process.env.SQS_DLQ_NAME;
+    delete process.env.SQS_EVENTS_QUEUE_NAME;
     expect(loadConfig().queues).toEqual({
       transactions: 'wager-transactions.fifo',
       deadLetter: 'wager-transactions-dlq.fifo',
+      events: 'wagering-events',
     });
   });
 

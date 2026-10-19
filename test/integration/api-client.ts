@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 import type { INestApplication } from '@nestjs/common';
 import { createApp } from '../../src/main.js';
-import { loadConfig } from '../../src/config.js';
+import { loadConfig, type AppConfig } from '../../src/config.js';
 
 export interface ApiResponse<T = any> {
   status: number;
@@ -14,8 +14,16 @@ export class ApiClient {
     private readonly baseUrl: string,
   ) {}
 
-  static async start(): Promise<ApiClient> {
-    const app = await createApp({ ...loadConfig(), port: 0 });
+  /** Background workers are off unless a test turns them on and drives them explicitly. */
+  static async start(overrides: (config: AppConfig) => AppConfig = (c) => c): Promise<ApiClient> {
+    const base = loadConfig();
+    const config = overrides({
+      ...base,
+      port: 0,
+      consumer: { ...base.consumer, enabled: false },
+      outbox: { ...base.outbox, enabled: false },
+    });
+    const app = await createApp(config);
     await app.listen(0, '127.0.0.1');
     return new ApiClient(app, await app.getUrl());
   }
