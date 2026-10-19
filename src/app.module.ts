@@ -1,9 +1,15 @@
 import { Module, type DynamicModule } from '@nestjs/common';
+import { APP_FILTER } from '@nestjs/core';
 import type { AppConfig } from './config.js';
 import { APP_CONFIG } from './tokens.js';
 import { DatabaseModule } from './infrastructure/database/database.module.js';
 import { MessagingModule } from './infrastructure/messaging/messaging.module.js';
 import { HealthController } from './health/health.controller.js';
+import { ProcessWagerService } from './application/process-wager.service.js';
+import { WalletService } from './application/wallet.service.js';
+import { WageringController, WalletsController } from './http/controllers.js';
+import { ErrorFilter } from './http/error.filter.js';
+import { ProviderAuthGuard } from './http/auth.guard.js';
 
 @Module({})
 export class AppModule {
@@ -12,9 +18,15 @@ export class AppModule {
       module: AppModule,
       global: true,
       imports: [DatabaseModule, MessagingModule],
-      controllers: [HealthController],
-      providers: [{ provide: APP_CONFIG, useValue: config }],
-      exports: [APP_CONFIG],
+      controllers: [HealthController, WalletsController, WageringController],
+      providers: [
+        { provide: APP_CONFIG, useValue: config },
+        { provide: APP_FILTER, useClass: ErrorFilter },
+        ProviderAuthGuard,
+        ProcessWagerService,
+        WalletService,
+      ],
+      exports: [APP_CONFIG, ProcessWagerService],
     };
   }
 }

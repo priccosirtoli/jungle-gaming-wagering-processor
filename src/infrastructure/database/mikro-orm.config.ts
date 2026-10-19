@@ -1,6 +1,7 @@
 import { defineConfig } from '@mikro-orm/postgresql';
 import { Migrator } from '@mikro-orm/migrations';
 import { migrationsList } from './migrations/index.js';
+import { entities } from './entities.js';
 
 /**
  * Migrations are hand-written SQL registered explicitly (no file discovery),
@@ -10,9 +11,8 @@ import { migrationsList } from './migrations/index.js';
 export function createOrmConfig(databaseUrl: string) {
   return defineConfig({
     clientUrl: databaseUrl,
-    entities: [],
+    entities,
     extensions: [Migrator],
-    discovery: { warnWhenNoEntities: false },
     migrations: {
       tableName: 'schema_migrations',
       migrationsList,
