@@ -40,6 +40,12 @@ Os testes de integração e de concorrência usam PostgreSQL e LocalStack reais,
 
 O CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) roda tudo isso a cada push: typecheck, unidade, migrations (up, down, down, up), integração, concorrência e build da imagem.
 
+## Demo
+
+- `bun run demo`, com a stack de 3 réplicas no ar, roda os cenários principais por HTTP e SQS e imprime um relatório.
+- No GitHub: **Actions > Demo > Run workflow** sobe tudo e mostra o relatório no resumo da execução.
+- Para testar à mão, use [docs/requests.http](docs/requests.http) com a extensão REST Client. Funciona também no GitHub Codespaces, onde o `.devcontainer` já vem com Docker e Bun.
+
 ## API
 
 ```bash
