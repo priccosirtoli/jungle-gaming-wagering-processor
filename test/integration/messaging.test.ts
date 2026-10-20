@@ -36,7 +36,7 @@ afterAll(async () => {
   sqs.destroy();
 });
 
-const messageData = (w: { id: string; playerId: string }, kind: string, amount: string, extra = {}) => {
+const messageData = (w: { id: string; playerId: string }, kind: string, amount: string, extra = {}): Record<string, unknown> => {
   const body = wager(w, kind, amount, extra);
   return { ...body, idempotencyKey: `${body.providerId}:${body.externalTransactionId}` };
 };
