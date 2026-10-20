@@ -1,0 +1,63 @@
+# Manual requests (VS Code / Codespaces "REST Client" extension: click "Send Request").
+# Start the stack first:  docker compose --profile app up -d --build --scale app=3
+# Instances answer on 3000, 3001 and 3002.
+
+@base = http://localhost:3000
+@other = http://localhost:3001
+@player = 0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1
+
+### 1. Health
+GET {{base}}/health/ready
+
+### 2. Create a wallet with 100.00 (copy the "id" from the response into @wallet below)
+POST {{base}}/wallets
+content-type: application/json
+
+{ "playerId": "{{player}}", "initialBalance": { "amount": "100.00", "currency": "BRL" } }
+
+###
+@wallet = paste-the-wallet-id-here
+
+### 3. BET 80.00 -> 200 PROCESSED, balance 20.00
+POST {{base}}/wagering/transactions
+content-type: application/json
+Idempotency-Key: provider-a:manual-bet-1
+
+{ "providerId": "provider-a", "externalTransactionId": "manual-bet-1", "playerId": "{{player}}", "walletId": "{{wallet}}", "roundId": "round-1", "gameId": "fortune-chimp", "kind": "BET", "money": { "amount": "80.00", "currency": "BRL" } }
+
+### 4. Same request on another instance -> same answer, idempotentReplay: true
+POST {{other}}/wagering/transactions
+content-type: application/json
+Idempotency-Key: provider-a:manual-bet-1
+
+{ "providerId": "provider-a", "externalTransactionId": "manual-bet-1", "playerId": "{{player}}", "walletId": "{{wallet}}", "roundId": "round-1", "gameId": "fortune-chimp", "kind": "BET", "money": { "amount": "80.00", "currency": "BRL" } }
+
+### 5. Same key, different amount -> 409 IDEMPOTENCY_CONFLICT
+POST {{base}}/wagering/transactions
+content-type: application/json
+Idempotency-Key: provider-a:manual-bet-1
+
+{ "providerId": "provider-a", "externalTransactionId": "manual-bet-1", "playerId": "{{player}}", "walletId": "{{wallet}}", "roundId": "round-1", "gameId": "fortune-chimp", "kind": "BET", "money": { "amount": "81.00", "currency": "BRL" } }
+
+### 6. Another BET 80.00 -> 422 REJECTED, INSUFFICIENT_FUNDS
+POST {{base}}/wagering/transactions
+content-type: application/json
+Idempotency-Key: provider-a:manual-bet-2
+
+{ "providerId": "provider-a", "externalTransactionId": "manual-bet-2", "playerId": "{{player}}", "walletId": "{{wallet}}", "roundId": "round-1", "gameId": "fortune-chimp", "kind": "BET", "money": { "amount": "80.00", "currency": "BRL" } }
+
+### 7. REFUND of the first BET -> 200, balance back to 100.00
+POST {{base}}/wagering/transactions
+content-type: application/json
+Idempotency-Key: provider-a:manual-refund-1
+
+{ "providerId": "provider-a", "externalTransactionId": "manual-refund-1", "playerId": "{{player}}", "walletId": "{{wallet}}", "roundId": "round-1", "gameId": "fortune-chimp", "kind": "REFUND", "referenceExternalTransactionId": "manual-bet-1", "money": { "amount": "80.00", "currency": "BRL" } }
+
+### 8. Ledger
+GET {{base}}/wallets/{{wallet}}/ledger?limit=50
+
+### 9. Reconciliation -> consistent: true
+POST {{base}}/wallets/{{wallet}}/reconciliation
+
+### 10. Metrics
+GET {{base}}/metrics

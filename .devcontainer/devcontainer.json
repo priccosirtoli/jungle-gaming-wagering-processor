@@ -1,0 +1,17 @@
+{
+  "name": "wagering-processor",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+  },
+  "postCreateCommand": "curl -fsSL https://bun.sh/install | bash -s bun-v1.4.3 && ~/.bun/bin/bun install",
+  "remoteEnv": {
+    "PATH": "${containerEnv:PATH}:/home/vscode/.bun/bin"
+  },
+  "forwardPorts": [3000, 3001, 3002],
+  "customizations": {
+    "vscode": {
+      "extensions": ["humao.rest-client"]
+    }
+  }
+}

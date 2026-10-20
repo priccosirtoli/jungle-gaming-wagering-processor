@@ -1,0 +1,37 @@
+name: Demo
+
+# Manual run: Actions > Demo > Run workflow. Starts the full stack with 3 app
+# replicas in Docker Compose and runs scripts/demo.ts; the report shows up in
+# the run summary.
+on:
+  workflow_dispatch:
+
+jobs:
+  demo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+
+      - run: bun install --frozen-lockfile
+
+      - name: Start Postgres, LocalStack and 3 app replicas
+        run: |
+          docker compose --profile app up -d --build --scale app=3
+          for port in 3000 3001 3002; do
+            for i in $(seq 1 60); do
+              curl -sf "http://localhost:$port/health/ready" > /dev/null && break
+              sleep 1
+            done
+          done
+
+      - name: Run demo scenarios
+        run: bun run demo
+
+      - name: App logs (JSON)
+        if: always()
+        run: docker compose --profile app logs --no-color app | tail -n 80

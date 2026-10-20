@@ -8,6 +8,7 @@
     "dev": "bun --watch run src/main.ts",
     "migrate": "bun run src/infrastructure/database/migrate.ts up",
     "migrate:down": "bun run src/infrastructure/database/migrate.ts down",
+    "demo": "bun run scripts/demo.ts",
     "typecheck": "bun --bun tsc --noEmit",
     "test": "bun test",
     "test:unit": "bun test test/unit",
