@@ -21,6 +21,7 @@ import {
 import type { CreateWalletCommand } from './commands.js';
 import { NotFoundError, ValidationError, WalletAlreadyExistsError } from './errors.js';
 import { newId } from './ids.js';
+import { Metrics } from '../infrastructure/observability/metrics.js';
 import { payloadHash } from './payload-hash.js';
 
 /** Provider id used for internal OPENING transactions. */
@@ -46,7 +47,10 @@ const MAX_PAGE = 200;
 export class WalletService {
   private readonly logger = new Logger(WalletService.name);
 
-  constructor(@Inject(MikroORM) private readonly orm: MikroORM) {}
+  constructor(
+    @Inject(MikroORM) private readonly orm: MikroORM,
+    @Inject(Metrics) private readonly metrics: Metrics,
+  ) {}
 
   /** Wallet, OPENING transaction, ledger entry and events in one SQL transaction. */
   async create(cmd: CreateWalletCommand, correlationId: string): Promise<Wallet> {
@@ -157,6 +161,7 @@ export class WalletService {
         checkedEntries: Number(row?.entries ?? 0),
       };
       if (!result.consistent) {
+        this.metrics.increment('reconciliation_divergences_total');
         this.logger.warn({
           message: 'Wallet balance diverges from ledger',
           walletId,

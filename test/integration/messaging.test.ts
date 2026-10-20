@@ -98,6 +98,47 @@ describe('SQS consumer', () => {
     expect(await queueDepth(sqs, queues.urls.transactions)).toEqual({ visible: 0, inFlight: 0 });
   });
 
+  test('inbox, transaction, ledger, wallet and outbox commit together or not at all', async () => {
+    const wallet = await api.createWallet('100.00');
+    // Make the last write of the SQL transaction (the outbox insert) fail in the real database.
+    await sql(
+      orm,
+      `create or replace function fail_balance_event() returns trigger language plpgsql as $$
+       begin
+         if new.event_type = 'WalletBalanceChanged' then raise exception 'injected outbox failure'; end if;
+         return new;
+       end; $$`,
+    );
+    await sql(orm, `create trigger fail_balance_event before insert on outbox_messages for each row execute function fail_balance_event()`);
+    const data = messageData(wallet, 'BET', '30.00');
+    try {
+      await sendWagerMessage(sqs, queues.urls.transactions, 'msg-atomic', data);
+      const { Messages = [] } = await sqs.send(
+        new ReceiveMessageCommand({
+          QueueUrl: queues.urls.transactions,
+          WaitTimeSeconds: 1,
+          MessageSystemAttributeNames: ['ApproximateReceiveCount', 'MessageGroupId'],
+        }),
+      );
+      expect((await consumer.decide(Messages[0]!)).action).toBe('retry');
+      await sqs.send(
+        new ChangeMessageVisibilityCommand({ QueueUrl: queues.urls.transactions, ReceiptHandle: Messages[0]!.ReceiptHandle, VisibilityTimeout: 0 }),
+      );
+    } finally {
+      await sql(orm, `drop trigger fail_balance_event on outbox_messages`);
+      await sql(orm, `drop function fail_balance_event()`);
+    }
+    // Nothing from the failed attempt survived.
+    expect(await balanceOf(wallet.id)).toBe('100.00');
+    expect(await sql(orm, `select 1 from wager_transactions where external_transaction_id = ?`, [data.externalTransactionId])).toEqual([]);
+    expect(await sql(orm, `select 1 from inbox_messages where message_id = 'msg-atomic'`)).toEqual([]);
+    expect(await debitsOf(wallet.id)).toBe(0);
+    // The redelivery then succeeds as if the first attempt never happened.
+    expect(await consumer.pollOnce()).toBe(1);
+    expect(await balanceOf(wallet.id)).toBe('70.00');
+    expect(await debitsOf(wallet.id)).toBe(1);
+  });
+
   test('a business rejection is terminal: stored as REJECTED and acked', async () => {
     const wallet = await api.createWallet('5.00');
     await sendWagerMessage(sqs, queues.urls.transactions, 'msg-reject', messageData(wallet, 'BET', '10.00'));

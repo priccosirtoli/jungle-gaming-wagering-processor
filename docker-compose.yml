@@ -29,6 +29,17 @@ services:
       timeout: 5s
       retries: 60
 
+  # One-shot migration job, so scaled app replicas never race on migrations.
+  migrate:
+    build: .
+    command: ["bun", "run", "migrate"]
+    environment:
+      DATABASE_URL: postgresql://wagering:wagering@postgres:5432/wagering
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles: ["app"]
+
   app:
     build: .
     environment:
@@ -40,11 +51,13 @@ services:
       SQS_ENDPOINT: http://localstack:4566
       SQS_QUEUE_NAME: wager-transactions.fifo
       SQS_DLQ_NAME: wager-transactions-dlq.fifo
+      SQS_EVENTS_QUEUE_NAME: wagering-events
+    # A port range so `--scale app=3` works: each replica gets its own host port.
     ports:
-      - "3000:3000"
+      - "3000-3005:3000"
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       localstack:
         condition: service_healthy
     profiles: ["app"]

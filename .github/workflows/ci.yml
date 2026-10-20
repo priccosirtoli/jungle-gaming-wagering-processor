@@ -41,8 +41,16 @@ jobs:
       - name: Concurrency tests (3+ processes, crash and restart)
         run: bun run test:concurrency
 
-      - name: Build app image
-        run: docker compose --profile app build app
+      - name: Smoke test with 3 app replicas in Docker Compose
+        run: |
+          docker compose --profile app up -d --build --scale app=3
+          for port in 3000 3001 3002; do
+            for i in $(seq 1 60); do
+              curl -sf "http://localhost:$port/health/ready" && echo " <- replica on $port ready" && break
+              sleep 1
+            done
+            curl -sf "http://localhost:$port/health/ready" > /dev/null
+          done
 
       - name: Service logs on failure
         if: failure()

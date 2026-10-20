@@ -9,4 +9,4 @@ COPY src ./src
 
 ENV NODE_ENV=production
 EXPOSE 3000
-CMD ["sh", "-c", "bun run migrate && bun run start"]
+CMD ["bun", "run", "start"]
