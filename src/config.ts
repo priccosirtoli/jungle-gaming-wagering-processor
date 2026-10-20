@@ -29,6 +29,19 @@ export interface AppConfig {
     intervalMs: number;
     batchSize: number;
   };
+  /**
+   * Reversals waiting for their reference are retried with exponential backoff
+   * (base * 2^attempt, capped). After maxAttempts they are REJECTED with
+   * REFERENCE_NOT_FOUND. Defaults give roughly a 6 minute window.
+   */
+  pendingReference: {
+    enabled: boolean;
+    intervalMs: number;
+    batchSize: number;
+    maxAttempts: number;
+    baseDelayMs: number;
+    maxDelayMs: number;
+  };
 }
 
 function required(name: string, fallback?: string): string {
@@ -69,6 +82,14 @@ export function loadConfig(): AppConfig {
       enabled: flag('OUTBOX_ENABLED', true),
       intervalMs: int('OUTBOX_INTERVAL_MS', 500),
       batchSize: int('OUTBOX_BATCH_SIZE', 50),
+    },
+    pendingReference: {
+      enabled: flag('PENDING_REFERENCE_ENABLED', true),
+      intervalMs: int('PENDING_REFERENCE_INTERVAL_MS', 1000),
+      batchSize: int('PENDING_REFERENCE_BATCH_SIZE', 50),
+      maxAttempts: int('PENDING_REFERENCE_MAX_ATTEMPTS', 10),
+      baseDelayMs: int('PENDING_REFERENCE_BASE_DELAY_MS', 1000),
+      maxDelayMs: int('PENDING_REFERENCE_MAX_DELAY_MS', 60_000),
     },
   };
 }

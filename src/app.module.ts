@@ -11,6 +11,7 @@ import { HealthController } from './health/health.controller.js';
 import { MetricsController } from './health/metrics.controller.js';
 import { ProcessWagerService } from './application/process-wager.service.js';
 import { WalletService } from './application/wallet.service.js';
+import { PendingReferenceWorker } from './application/pending-reference.worker.js';
 import { WageringController, WalletsController } from './http/controllers.js';
 import { ErrorFilter } from './http/error.filter.js';
 import { ProviderAuthGuard } from './http/auth.guard.js';
@@ -32,6 +33,7 @@ export class AppModule {
         WalletService,
         WagerConsumer,
         OutboxPublisher,
+        PendingReferenceWorker,
       ],
       exports: [APP_CONFIG, Metrics],
     };

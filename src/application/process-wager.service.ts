@@ -1,6 +1,10 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { LockMode, LockWaitTimeoutException, UniqueConstraintViolationException } from '@mikro-orm/core';
 import { Metrics } from '../infrastructure/observability/metrics.js';
+import { APP_CONFIG } from '../tokens.js';
+import type { AppConfig } from '../config.js';
+import type { Wallet } from '../domain/wallet/wallet.js';
+import { FailureCode } from '../domain/wager/failure-code.js';
 import { MikroORM, type EntityManager } from '@mikro-orm/postgresql';
 import type { Money } from '../domain/money/money.js';
 import { applyWagerTransaction } from '../domain/wager/apply-wager-transaction.js';
@@ -65,6 +69,7 @@ export class ProcessWagerService {
   constructor(
     @Inject(MikroORM) private readonly orm: MikroORM,
     @Inject(Metrics) private readonly metrics: Metrics,
+    @Inject(APP_CONFIG) private readonly config: AppConfig,
   ) {}
 
   async execute(cmd: SubmitWagerCommand, meta: ProcessMeta): Promise<WagerResult> {
@@ -143,7 +148,25 @@ export class ProcessWagerService {
       createdAt: now,
     });
     const events: EventContext = { newId, correlationId: meta.correlationId, causationId: meta.causationId, occurredAt: now };
+    const { result } = await this.resolveAndApply(em, tx, wallet, walletRecord, events, now);
+    return result;
+  }
 
+  /**
+   * Resolves the reference (for reversals), applies the rules and saves the
+   * outcome. Shared by the first submission and by the PENDING_REFERENCE worker,
+   * which passes the managed `existing` record to update instead of inserting.
+   * Must run inside a transaction holding the wallet lock.
+   */
+  async resolveAndApply(
+    em: EntityManager,
+    tx: WagerTransaction,
+    wallet: Wallet,
+    walletRecord: WalletRecord,
+    events: EventContext,
+    now: Date,
+    existing?: WagerTransactionRecord,
+  ): Promise<{ result: WagerResult; referenceMissing: boolean }> {
     let reference: WagerTransaction | undefined;
     let referenceAlreadyReversed = false;
     if (tx.isReversal()) {
@@ -152,9 +175,11 @@ export class ProcessWagerService {
         externalTransactionId: tx.referenceExternalTransactionId!,
       });
       if (!referenceRecord) {
-        tx.markPendingReference();
-        await this.save(em, tx, now, [WagerTransactionPendingReference.from(tx, events)]);
-        return { transaction: tx, balance: wallet.balance, idempotentReplay: false };
+        if (!existing) {
+          tx.markPendingReference();
+          await this.save(em, tx, now, [WagerTransactionPendingReference.from(tx, events)]);
+        }
+        return { result: { transaction: tx, balance: wallet.balance, idempotentReplay: false }, referenceMissing: true };
       }
       reference = transactionToDomain(referenceRecord);
       referenceAlreadyReversed =
@@ -168,7 +193,7 @@ export class ProcessWagerService {
     const outcome = applyWagerTransaction(wallet, tx, { reference, referenceAlreadyReversed, ledgerEntryId: newId(), at: now });
 
     if (outcome.status === 'REJECTED') {
-      await this.save(em, tx, now, [WagerTransactionRejected.from(tx, outcome.failureCode, events)]);
+      await this.save(em, tx, now, [WagerTransactionRejected.from(tx, outcome.failureCode, events)], undefined, existing);
     } else {
       const published: IntegrationEvent<unknown>[] = [WagerTransactionProcessed.from(tx, wallet, events)];
       if (outcome.entry) {
@@ -176,9 +201,22 @@ export class ProcessWagerService {
         walletToRecord(wallet, walletRecord);
         published.push(WalletBalanceChanged.from(wallet, outcome.entry, events));
       }
-      await this.save(em, tx, now, published, outcome.entry);
+      await this.save(em, tx, now, published, outcome.entry, existing);
     }
-    return { transaction: tx, balance: wallet.balance, idempotentReplay: false };
+    return { result: { transaction: tx, balance: wallet.balance, idempotentReplay: false }, referenceMissing: false };
+  }
+
+  /** Rejects a reversal whose reference never arrived (retry limit reached). */
+  async rejectMissingReference(
+    em: EntityManager,
+    tx: WagerTransaction,
+    wallet: Wallet,
+    events: EventContext,
+    now: Date,
+    existing: WagerTransactionRecord,
+  ): Promise<void> {
+    tx.reject(FailureCode.ReferenceNotFound, now, wallet.balance);
+    await this.save(em, tx, now, [WagerTransactionRejected.from(tx, FailureCode.ReferenceNotFound, events)], undefined, existing);
   }
 
   /**
@@ -193,8 +231,20 @@ export class ProcessWagerService {
     now: Date,
     events: IntegrationEvent<unknown>[],
     ledgerEntry?: WalletLedgerEntry,
+    existing?: WagerTransactionRecord,
   ) {
-    em.persist(transactionToRecord(tx, now));
+    if (existing) {
+      transactionToRecord(tx, now, existing);
+      if (tx.isTerminal()) {
+        existing.nextReferenceAttemptAt = null;
+      }
+    } else {
+      const record = transactionToRecord(tx, now);
+      record.referenceAttempts = 0;
+      record.nextReferenceAttemptAt =
+        tx.status === WagerTransactionStatus.PendingReference ? new Date(now.getTime() + this.config.pendingReference.baseDelayMs) : null;
+      em.persist(record);
+    }
     await em.flush();
     if (ledgerEntry) {
       em.persist(ledgerEntryToRecord(ledgerEntry));

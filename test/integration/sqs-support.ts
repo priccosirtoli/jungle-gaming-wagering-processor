@@ -25,7 +25,7 @@ export interface TestQueues {
 }
 
 /** Isolated queues per test file, with the same shape as production (FIFO + DLQ redrive). */
-export async function createTestQueues(sqs: SQSClient, maxReceiveCount = 3): Promise<TestQueues> {
+export async function createTestQueues(sqs: SQSClient, maxReceiveCount = 3, visibilityTimeout = 30): Promise<TestQueues> {
   const prefix = `t${Date.now()}${Math.random().toString(36).slice(2, 6)}`;
   const names = { transactions: `${prefix}.fifo`, deadLetter: `${prefix}-dlq.fifo`, events: `${prefix}-events` };
   const dlq = await sqs.send(
@@ -39,7 +39,7 @@ export async function createTestQueues(sqs: SQSClient, maxReceiveCount = 3): Pro
       QueueName: names.transactions,
       Attributes: {
         FifoQueue: 'true',
-        VisibilityTimeout: '30',
+        VisibilityTimeout: String(visibilityTimeout),
         RedrivePolicy: JSON.stringify({
           deadLetterTargetArn: dlqArn.Attributes?.QueueArn,
           maxReceiveCount: String(maxReceiveCount),

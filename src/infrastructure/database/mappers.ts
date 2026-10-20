@@ -84,6 +84,8 @@ export function transactionToRecord(
   target.createdAt = t.createdAt;
   target.processedAt = t.processedAt ?? null;
   target.updatedAt = now;
+  target.referenceAttempts ??= 0;
+  target.nextReferenceAttemptAt ??= null;
   return target;
 }
 

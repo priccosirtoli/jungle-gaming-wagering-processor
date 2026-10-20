@@ -16,6 +16,7 @@ describe('health', () => {
       port: 0,
       consumer: { ...config.consumer, enabled: false },
       outbox: { ...config.outbox, enabled: false },
+      pendingReference: { ...config.pendingReference, enabled: false },
     });
     await app.listen(0);
     baseUrl = await app.getUrl();

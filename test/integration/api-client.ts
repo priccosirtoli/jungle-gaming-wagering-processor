@@ -22,6 +22,7 @@ export class ApiClient {
       port: 0,
       consumer: { ...base.consumer, enabled: false },
       outbox: { ...base.outbox, enabled: false },
+      pendingReference: { ...base.pendingReference, enabled: false },
     });
     const app = await createApp(config);
     await app.listen(0, '127.0.0.1');

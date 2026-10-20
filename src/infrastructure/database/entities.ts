@@ -55,6 +55,9 @@ export class WagerTransactionRecord {
   createdAt!: Date;
   processedAt?: Date | null;
   updatedAt!: Date;
+  /** Retry bookkeeping for PENDING_REFERENCE; persistence-only, not part of the domain state. */
+  referenceAttempts!: number;
+  nextReferenceAttemptAt?: Date | null;
 }
 
 export const WagerTransactionSchema = new EntitySchema<WagerTransactionRecord>({
@@ -81,6 +84,8 @@ export const WagerTransactionSchema = new EntitySchema<WagerTransactionRecord>({
     createdAt: timestamptz,
     processedAt: { ...timestamptz, nullable: true },
     updatedAt: timestamptz,
+    referenceAttempts: { type: 'integer' },
+    nextReferenceAttemptAt: { ...timestamptz, nullable: true },
   },
 });
 

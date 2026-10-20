@@ -33,10 +33,13 @@ jobs:
         run: docker compose up -d --wait postgres localstack
 
       - name: Migrations up, down, up
-        run: bun run migrate && bun run migrate:down && bun run migrate
+        run: bun run migrate && bun run migrate:down && bun run migrate:down && bun run migrate
 
       - name: Integration tests
         run: bun run test:integration
+
+      - name: Concurrency tests (3+ processes, crash and restart)
+        run: bun run test:concurrency
 
       - name: Build app image
         run: docker compose --profile app build app
