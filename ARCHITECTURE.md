@@ -2,6 +2,12 @@
 
 Este documento explica as decisões do Distributed Wagering Processor, os trade-offs aceitos e o que ficou de fora. O enunciado está em [docs/CHALLENGE.md](docs/CHALLENGE.md).
 
+Diagramas detalhados, com o fonte em PlantUML na mesma pasta:
+
+- [ciclo de vida da transação](docs/diagrams/01-process-wager-sequence.svg)
+- [decisão de idempotência](docs/diagrams/02-idempotency-activity.svg)
+- [mensageria: consumer e outbox](docs/diagrams/03-messaging-sequence.svg)
+
 ## 1. Visão geral
 
 ```mermaid
