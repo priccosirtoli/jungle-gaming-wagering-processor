@@ -13,8 +13,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: Render with PlantUML
         run: |
-          docker run --rm -v "$PWD/docs/diagrams:/data" -w /data plantuml/plantuml:latest -tsvg -failfast2 /data/*.puml
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/docs/diagrams:/data" -w /data plantuml/plantuml:latest -tsvg -failfast2 /data/*.puml
           ls -l docs/diagrams
+          test "$(ls docs/diagrams/*.svg | wc -l)" -eq "$(ls docs/diagrams/*.puml | wc -l)"
       - uses: actions/upload-artifact@v4
         with:
           name: diagrams-svg
