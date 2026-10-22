@@ -1,0 +1,86 @@
+@startuml 02-idempotency-activity
+' ============================================================================
+' Decisão de idempotência
+' - hash: hashWagerCommand() + payloadHash()   (src/application/commands.ts, payload-hash.ts)
+' - decisão: ProcessWagerService.replayExisting() (src/application/process-wager.service.ts)
+' A chave fica persistida em wager_transactions (UNIQUE idempotency_key e
+' UNIQUE (provider_id, external_transaction_id)); não há cache em memória.
+' ============================================================================
+title Idempotência: hash canônico, replay legítimo e conflito 409
+
+start
+
+:Recebe requisição com header **Idempotency-Key**
+(no SQS: data.idempotencyKey);
+
+if (Chave presente e válida?) then (não)
+  :400 INVALID_PAYLOAD;
+  stop
+endif
+
+partition "Hash canônico do payload" {
+  :Seleciona só os campos de negócio:
+  providerId, externalTransactionId, playerId, walletId,
+  roundId, gameId, kind, money, referenceExternalTransactionId;
+  note right
+    Header e metadados de transporte
+    NÃO entram no hash.
+  end note
+  :Normaliza o amount via Money
+  ("10" e "10.00" viram "10.00");
+  :JSON canônico: chaves ordenadas recursivamente,
+  sem espaços, campos undefined removidos;
+  :payloadHash = SHA-256 (hex);
+}
+
+:BEGIN + SELECT wallet ... FOR UPDATE
+(requisições da mesma wallet chegam aqui uma por vez);
+
+:Busca transação existente por
+idempotency_key **ou** (provider_id, external_transaction_id);
+
+if (Existe?) then (sim)
+  if (Mesma idempotency_key **e** mesmo payload_hash?) then (sim)
+    #palegreen:Replay legítimo;
+    :Reidrata a transação original;
+    if (observed_balance gravado?) then (sim)
+      :Usa o saldo **observado no momento original**;
+    else (não, ex.: PENDING_REFERENCE)
+      :Usa o saldo atual da wallet;
+    endif
+    :Resposta idêntica à original
+    (mesmo status, mesmo código HTTP, failureCode)
+    com **idempotentReplay: true**;
+    :métrica duplicates_detected_total;
+    stop
+  else (não)
+    #pink:Conflito;
+    :409 **IDEMPOTENCY_CONFLICT**
+    (nunca tratado como replay);
+    stop
+  endif
+else (não)
+  :Processa normalmente e grava
+  idempotency_key + payload_hash + observed_balance;
+  :COMMIT;
+  if (COMMIT falhou com UniqueConstraintViolation?) then (sim)
+    note right
+      Corrida: mesma chave enviada para
+      walletIds diferentes (locks diferentes).
+      O índice único do banco decidiu o vencedor.
+    end note
+    :Relê a linha vencedora (replayExisting);
+    if (Mesmo hash?) then (sim)
+      #palegreen:Replay (idempotentReplay: true);
+    else (não)
+      #pink:409 IDEMPOTENCY_CONFLICT;
+    endif
+    stop
+  else (não)
+    :Resposta original
+    (idempotentReplay: false);
+    stop
+  endif
+endif
+
+@enduml

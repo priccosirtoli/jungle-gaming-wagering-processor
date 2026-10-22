@@ -1,0 +1,88 @@
+@startuml 01-process-wager-sequence
+' ============================================================================
+' Ciclo de vida de uma transação em ProcessWagerService.execute()
+' (src/application/process-wager.service.ts)
+'
+' Tudo entre BEGIN e COMMIT é UMA transação SQL: ou tudo é confirmado, ou nada.
+' O lock é por wallet (linha de "wallets"), nunca global.
+' ============================================================================
+title ProcessWagerService: transação, lock pessimista e commit atômico
+
+autonumber
+actor "Provedor" as P
+participant "WageringController\n(HTTP)\nou WagerConsumer (SQS)" as IN
+participant "ProcessWagerService" as S
+participant "applyWagerTransaction()\n(domínio puro)" as D
+database "PostgreSQL" as PG
+
+P -> IN : POST /wagering/transactions\nIdempotency-Key + payload
+IN -> IN : parseSubmitWager()\n(valida payload; Money.from rejeita\nNaN, 1e3, >2 casas, negativos)
+IN -> S : execute(command, meta)
+S -> S : hashWagerCommand()\nSHA-256 do JSON canônico
+
+== Transação SQL (em.fork().transactional) ==
+S -> PG : BEGIN
+S -> PG : SET LOCAL lock_timeout = '5s'
+
+' ---- Lock pessimista: serializa só esta wallet, entre todas as instâncias
+S -> PG : SELECT * FROM wallets WHERE id = $walletId\nFOR UPDATE   <i>(LockMode.PESSIMISTIC_WRITE)</i>
+note right of PG
+  Outras operações na MESMA wallet
+  esperam aqui (métrica wallet_lock_wait_ms).
+  Wallets diferentes seguem em paralelo.
+  Se passar de 5s: 503 TRANSIENT_FAILURE.
+end note
+PG --> S : walletRecord (travado)
+
+alt wallet não existe
+  S -> PG : ROLLBACK
+  S --> IN : NotFoundError (404 / DLQ)
+end
+
+opt entrada via SQS (meta.inbox)
+  S -> PG : INSERT INTO inbox_messages ... ON CONFLICT DO NOTHING
+  note right: duplicata conta em inbox_duplicates_total
+end
+
+S -> PG : SELECT wager_transactions WHERE idempotency_key = ?\nOR (provider_id, external_transaction_id) = (?, ?)
+alt já existe (ver diagrama 02)
+  S --> IN : replay (resultado original) ou 409 conflito
+end
+
+S -> S : WagerTransaction.create() -> status PENDING
+
+opt REFUND / ROLLBACK
+  S -> PG : SELECT referência por (provider_id, reference_external_transaction_id)
+  alt referência ainda não chegou
+    S -> PG : INSERT wager_transactions (PENDING_REFERENCE)\nINSERT outbox_messages (WagerTransactionPendingReference)
+    S -> PG : COMMIT
+    S --> IN : 202 PENDING_REFERENCE
+  end
+  S -> PG : SELECT count(*) já revertida pelo mesmo kind?
+end
+
+' ---- Regras de negócio sobre o estado já travado (sem I/O)
+S -> D : applyWagerTransaction(wallet, tx, {reference, ...})
+D -> D : wallet.debit() / wallet.credit()\n(rejeita saldo insuficiente)\n-> retorna WalletLedgerEntry balanceado
+D --> S : PROCESSED + entry | REJECTED + failureCode
+
+' ---- Persistência: 2 flushes, mesma transação SQL
+S -> PG : <b>flush 1</b>\nUPDATE wallets SET balance, version  <i>(se o saldo mudou)</i>\nINSERT wager_transactions (status, observed_balance)
+S -> PG : <b>flush 2</b>\nINSERT wallet_ledger_entries  <i>(1 por transação; trigger: append-only)</i>\nINSERT outbox_messages  <i>(WagerTransactionProcessed,\nWalletBalanceChanged ou WagerTransactionRejected)</i>
+note right of PG
+  Barreiras no schema, mesmo se o código falhar:
+  CHECK (balance >= 0), UNIQUE (transaction_id) no ledger,
+  CHECK de lançamento balanceado, UNIQUE idempotency_key.
+end note
+
+S -> PG : COMMIT
+note over S, PG
+  Somente agora os eventos existem para o OutboxPublisher.
+  Nenhum evento é publicado antes do commit.
+end note
+
+S -> S : métricas: wager_transactions_total{status},\nwager_processing_ms
+S --> IN : WagerResult {transaction, balance, idempotentReplay}
+IN --> P : 200 PROCESSED | 422 REJECTED + failureCode
+
+@enduml

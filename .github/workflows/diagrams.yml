@@ -1,0 +1,21 @@
+name: Diagrams
+
+# Renders docs/diagrams/*.puml to SVG (fails on syntax errors) and uploads them.
+on:
+  workflow_dispatch:
+  push:
+    paths: ["docs/diagrams/**"]
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Render with PlantUML
+        run: |
+          docker run --rm -v "$PWD/docs/diagrams:/data" -w /data plantuml/plantuml:latest -tsvg -failfast2 /data/*.puml
+          ls -l docs/diagrams
+      - uses: actions/upload-artifact@v4
+        with:
+          name: diagrams-svg
+          path: docs/diagrams/*.svg

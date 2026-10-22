@@ -1,0 +1,84 @@
+@startuml 03-messaging-sequence
+' ============================================================================
+' Mensageria assíncrona
+' - Entrada: WagerConsumer   (src/infrastructure/messaging/wager-consumer.ts)
+' - Saída:   OutboxPublisher (src/infrastructure/messaging/outbox-publisher.ts)
+' Ambos rodam em TODAS as instâncias; o PostgreSQL coordena.
+' ============================================================================
+title Mensageria: WagerConsumer (inbox, ack pós-commit) e OutboxPublisher (SKIP LOCKED)
+
+autonumber
+queue "wager-transactions.fifo\n(MessageGroupId = walletId)" as Q
+queue "wager-transactions-dlq.fifo" as DLQ
+participant "WagerConsumer" as C
+participant "ProcessWagerService" as S
+database "PostgreSQL" as PG
+participant "OutboxPublisher" as O
+queue "wagering-events" as E
+
+== Entrada: consumo com inbox e ack somente após o commit ==
+C -> Q : ReceiveMessage (long-poll, até 10)
+Q --> C : mensagem {messageId, type, data}
+C -> C : parseEnvelope() + parseSubmitWager()
+
+alt mensagem malformada / payload inválido / wallet inexistente / conflito de idempotência
+  C -> DLQ : SendMessage (atributo failureReason)
+  C -> Q : DeleteMessage
+  note right of C : <b>permanente</b>: retry não ajuda\n(métrica dlq_messages_total)
+else mensagem válida
+  C -> S : execute(command, {inbox: consumerName + messageId})
+  S -> PG : BEGIN; SELECT wallet FOR UPDATE
+  S -> PG : INSERT inbox_messages (consumer_name, message_id)\nON CONFLICT DO NOTHING
+  S -> PG : transação + ledger + wallet + outbox_messages
+  S -> PG : COMMIT
+  S --> C : resultado (PROCESSED / REJECTED / PENDING_REFERENCE / replay)
+
+  alt commit ok (inclusive rejeição de negócio)
+    C -> Q : <b>DeleteMessage (ack)</b>
+    note right of C
+      O ack vem DEPOIS do commit.
+      Se o processo morrer entre o commit e o ack,
+      a mensagem volta após o visibility timeout:
+      a inbox e a idempotency_key transformam a
+      reentrega em replay, sem novo débito.
+    end note
+  else falha transitória (conexão, lock_timeout, deadlock)
+    S -> PG : ROLLBACK (nada é gravado, nem a inbox)
+    C -> Q : ChangeMessageVisibility\n(base * 2^(receiveCount-1), teto 300s)
+    note right of C : métrica consumer_retries_total
+    ... após maxReceiveCount = 5 entregas ...
+    Q -> DLQ : redrive policy do próprio SQS
+  end
+end
+
+== SIGTERM ==
+C -> C : para o polling (aborta o long-poll)
+C -> C : termina a mensagem em andamento (grace period)
+C -> Q : ChangeMessageVisibility = 0 nas que não começaram
+
+== Saída: Transactional Outbox com vários publishers ==
+loop a cada OUTBOX_INTERVAL_MS, em cada instância
+  O -> PG : BEGIN
+  O -> PG : SELECT ... FROM outbox_messages\nWHERE published_at IS NULL AND next_attempt_at <= now()\nORDER BY seq LIMIT N\n<b>FOR UPDATE SKIP LOCKED</b>
+  note right of PG
+    Dois publishers nunca pegam a mesma linha.
+    Se um publisher morrer, o Postgres libera
+    os locks e outra instância assume.
+  end note
+  PG --> O : linhas pendentes (travadas)
+  O -> E : SendMessageBatch (até 10)\natributo eventId = id da outbox
+  alt publicado
+    O -> PG : UPDATE published_at = now()
+  else falhou
+    O -> PG : UPDATE attempts + 1,\nnext_attempt_at = now + backoff (1s, 2s, 4s... até 60s)
+  end
+  O -> PG : COMMIT
+  O -> O : métricas outbox_lag_seconds, outbox_pending
+end
+note over O, E
+  Entrega <b>at-least-once</b>: se o processo morrer depois de o SQS
+  aceitar e antes do COMMIT, o evento sai de novo.
+  O consumidor de eventos deduplica pelo eventId.
+end note
+
+@enduml
